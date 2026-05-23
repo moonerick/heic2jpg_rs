@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use walkdir::WalkDir;
 
-/// 核心转换函数
+/// 核心转换函数 (完美适配 libheif-rs 1.1.0+ 新版 API)
 fn convert_heic_to_jpg(heic_path: &Path, quality: u8) -> Result<()> {
     // 1. 读取 HEIC 文件
     let path_str = heic_path.to_str().context("路径包含无效字符")?;
@@ -19,7 +19,10 @@ fn convert_heic_to_jpg(heic_path: &Path, quality: u8) -> Result<()> {
     let height = handle.height();
 
     // 2. 解码为 RGB24 (交错格式)
-    let image = handle.decode(ColorSpace::Rgb(Chroma::Rgb), false)?;
+    // 适配新版 API: 使用 decode_color_space 和 InterleavedRgb
+    let image = handle.decode_color_space(ColorSpace::Rgb(Chroma::InterleavedRgb))
+        .context("解码 HEIC 图像失败")?;
+        
     let planes = image.planes();
     let interleaved = planes
         .interleaved
@@ -33,17 +36,23 @@ fn convert_heic_to_jpg(heic_path: &Path, quality: u8) -> Result<()> {
     encoder.set_sampling_factor(SamplingFactor::R_4_4_4); 
 
     // --- 提取并注入 ICC Profile ---
-    let icc_profile = handle.color_profile_raw();
-    if !icc_profile.is_empty() {
-        let mut icc_payload = b"ICC_PROFILE\0\x01\x01".to_vec();
-        icc_payload.extend_from_slice(icc_profile);
-        encoder.add_app_segment(2, &icc_payload)?;
+    // 适配新版 API: 返回 Option，且需显式调用 .data() 获取字节切片
+    if let Some(icc_profile) = handle.color_profile_raw() {
+        let icc_data = icc_profile.data();
+        if !icc_data.is_empty() {
+            let mut icc_payload = b"ICC_PROFILE\0\x01\x01".to_vec();
+            icc_payload.extend_from_slice(icc_data);
+            encoder.add_app_segment(2, &icc_payload)?;
+        }
     }
 
     // --- 提取并注入 EXIF ---
-    let exif_ids = handle.list_metadata_block_ids("Exif");
-    if let Some(&id) = exif_ids.first() {
-        if let Ok(exif_raw) = handle.metadata(id) {
+    // 适配新版 API: 采用预分配数组进行内存安全的元数据查询
+    // 使用 Default::default() 让 Rust 自动推导底层的 ItemId 类型，极其稳妥
+    let mut item_ids = vec![Default::default(); 1]; 
+    let count = handle.metadata_block_ids(&mut item_ids, *b"Exif");
+    if count > 0 {
+        if let Ok(exif_raw) = handle.metadata(item_ids[0]) {
             if exif_raw.len() > 4 {
                 let mut exif_payload = b"Exif\0\0".to_vec();
                 exif_payload.extend_from_slice(&exif_raw[4..]);
