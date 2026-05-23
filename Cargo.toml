@@ -3,3 +3,11 @@ name = "heic2jpg_rs"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0"
+
+[dependencies]
+libheif-rs = "1.0"       # HEIC 解码
+jpeg-encoder = "0.3"     # JPEG 编码 (支持写入 EXIF/ICC)
+rayon = "1.8"            # 多线程处理
+walkdir = "2.4"          # 目录递归遍历
+num_cpus = "1.16"        # 获取 CPU 核心数
+anyhow = "1.0"           # 错误处理
