@@ -1,2 +1,3 @@
 # heic2jpg_rs
 使用rust将iPhone拍摄的heic照片转换为jpg格式
+jpeg_encoder、libheif_rs、rayon
