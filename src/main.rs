@@ -9,9 +9,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use walkdir::WalkDir;
 
 /// 核心转换函数
-/// - quality: 1-100 质量控制
-/// - SamplingFactor::R_4_4_4 相当于 Python subsampling=0 (防止色彩溢出)
-/// - 保留 EXIF (APP1) 和 ICC Profile (APP2)
 fn convert_heic_to_jpg(heic_path: &Path, quality: u8) -> Result<()> {
     // 1. 读取 HEIC 文件
     let path_str = heic_path.to_str().context("路径包含无效字符")?;
@@ -35,7 +32,7 @@ fn convert_heic_to_jpg(heic_path: &Path, quality: u8) -> Result<()> {
     let mut encoder = Encoder::new_file(&jpg_path, quality)?;
     encoder.set_sampling_factor(SamplingFactor::R_4_4_4); 
 
-    // --- 提取并注入 ICC Profile (Apple Display P3 等) ---
+    // --- 提取并注入 ICC Profile ---
     let icc_profile = handle.color_profile_raw();
     if !icc_profile.is_empty() {
         let mut icc_payload = b"ICC_PROFILE\0\x01\x01".to_vec();
@@ -43,7 +40,7 @@ fn convert_heic_to_jpg(heic_path: &Path, quality: u8) -> Result<()> {
         encoder.add_app_segment(2, &icc_payload)?;
     }
 
-    // --- 提取并注入 EXIF (拍摄时间、GPS、方向等) ---
+    // --- 提取并注入 EXIF ---
     let exif_ids = handle.list_metadata_block_ids("Exif");
     if let Some(&id) = exif_ids.first() {
         if let Ok(exif_raw) = handle.metadata(id) {
@@ -81,12 +78,86 @@ fn main() {
         PathBuf::from(input_dir)
     };
 
-    // 2. 交互式获取质量 (模拟输入框，默认 100)
+    // 2. 交互式获取质量
     print!("请输入输出 JPG 的质量 (1-100) [直接回车默认 100]: ");
-    io::stdout().flush().unwrap(); // 确保提示语立刻显示在屏幕上
+    io::stdout().flush().unwrap();
     
     let mut quality_input = String::new();
     io::stdin().read_line(&mut quality_input).unwrap();
     let quality_input = quality_input.trim();
 
     // 如果用户直接回车（输入为空），或者输入的不是数字，都默认使用 100
+    let quality_val: u8 = if quality_input.is_empty() {
+        100
+    } else {
+        quality_input.parse().unwrap_or(100)
+    };
+
+    // 递归查找 HEIC 文件
+    let mut heic_files = Vec::new();
+    for entry in WalkDir::new(&input_path).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                if ext.eq_ignore_ascii_case("heic") || ext.eq_ignore_ascii_case("heif") {
+                    heic_files.push(path.to_path_buf());
+                }
+            }
+        }
+    }
+
+    if heic_files.is_empty() {
+        println!("在 {} 中未找到 HEIC 文件。", input_path.display());
+        println!("\n按回车键退出...");
+        let _ = io::stdin().read_line(&mut String::new());
+        return;
+    }
+
+    // 计算进程数：取核心数的 75%
+    let logical_cpus = num_cpus::get();
+    let num_procs = std::cmp::max((logical_cpus as f32 * 0.75) as usize, 1);
+
+    // 配置 Rayon 全局线程池
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(num_procs)
+        .build_global()
+        .unwrap();
+
+    println!("\n--- 任务开始 ---");
+    println!("找到文件: {} 个", heic_files.len());
+    println!("输出目录: {}", input_path.display());
+    println!("使用线程: {} 个 | 设定质量: {}%", num_procs, quality_val);
+    println!("----------------\n");
+
+    // 原子计数器，用于统计成功数量
+    let success_count = AtomicUsize::new(0);
+
+    // 并行处理
+    heic_files.par_iter().for_each(|file| {
+        match convert_heic_to_jpg(file, quality_val) {
+            Ok(_) => {
+                success_count.fetch_add(1, Ordering::SeqCst);
+            }
+            Err(e) => {
+                println!(
+                    "❌ 失败 {}: {}",
+                    file.file_name().unwrap_or_default().to_string_lossy(),
+                    e
+                );
+            }
+        }
+    });
+
+    let successes = success_count.load(Ordering::SeqCst);
+    println!("\n--- 统计结果 ---");
+    println!(
+        "总计: {} | 成功: {} | 失败: {}",
+        heic_files.len(),
+        successes,
+        heic_files.len() - successes
+    );
+
+    println!("\n任务结束。按回车键退出...");
+    io::stdout().flush().unwrap();
+    let _ = io::stdin().read_line(&mut String::new());
+}
