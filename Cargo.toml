@@ -11,3 +11,6 @@ rayon = "1.8"            # 多线程处理
 walkdir = "2.4"          # 目录递归遍历
 num_cpus = "1.16"        # 获取 CPU 核心数
 anyhow = "1.0"           # 错误处理
+
+[build-dependencies]
+winres = "0.1"
