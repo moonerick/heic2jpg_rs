@@ -1,9 +1,11 @@
-name: Build Rust HEIC Converter
+name: Build and Release
 
-# 触发条件：当你推送代码到 main 分支，或者在网页上手动点击运行
+# 触发条件修改：
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main" ] # 平时修改代码也会编译，确保代码没写错（但不会发布）
+    tags:
+      - 'v*'             # 核心：当你发布带 v 开头的版本号（如 v1.0.0）时触发发布流程
   workflow_dispatch:
 
 jobs:
@@ -11,27 +13,21 @@ jobs:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
-      # 并行编译三个平台
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
 
     steps:
-      # 1. 检出你的代码
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. 安装系统依赖 (Ubuntu 平台)
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libheif-dev
 
-      # 3. 安装系统依赖 (macOS 平台)
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
         run: brew install libheif
 
-      # 4. 安装系统依赖 (Windows 平台)
-      # 使用 GitHub Actions 自带的 vcpkg 安装 libheif
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
         run: |
@@ -39,32 +35,54 @@ jobs:
           vcpkg install libheif:x64-windows
         shell: cmd
 
-      # 5. 安装 Rust 工具链
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # 6. 设置 Windows 下的 VCPKG 环境变量以供 Rust 使用
       - name: Set VCPKG env (Windows)
         if: matrix.os == 'windows-latest'
         run: echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> $GITHUB_ENV
         shell: bash
 
-      # 7. 核心步骤：执行 Release 模式编译
       - name: Cargo Build Release
         run: cargo build --release
 
-      # 8. 打包并上传编译好的文件 (Windows)
-      - name: Upload Artifact (Windows)
+      # [新增] 将编译出来的文件改名，加上系统后缀，避免后面汇总时名字冲突
+      - name: Rename Binary (Windows)
         if: matrix.os == 'windows-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: heic2jpg-windows
-          path: target/release/heic2jpg_rs.exe
-
-      # 9. 打包并上传编译好的文件 (Ubuntu/macOS)
-      - name: Upload Artifact (Unix)
+        run: move target\release\heic2jpg_rs.exe target\release\heic2jpg-windows.exe
+        shell: cmd
+        
+      - name: Rename Binary (macOS & Ubuntu)
         if: matrix.os != 'windows-latest'
+        run: mv target/release/heic2jpg_rs target/release/heic2jpg-${{ matrix.os }}
+
+      # [新增] 上传给后面的 Release 任务使用
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: heic2jpg-${{ matrix.os }}
-          path: target/release/heic2jpg_rs
+          name: bin-${{ matrix.os }}
+          path: target/release/heic2jpg-*
+
+  # [全新任务] 将编译好的文件发布到 Release 面板
+  release:
+    name: Publish to GitHub Releases
+    needs: build # 必须等待上面的 build 任务全部成功才执行
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') # 极其重要：只有在你打版本 Tag 时才执行此任务
+    permissions:
+      contents: write # 必须赋予写入权限，机器人才能帮你向 Release 里传文件
+    steps:
+      - name: Download all compiled binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          merge-multiple: true # 将三个平台的文件全部下载到当前目录
+          
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            heic2jpg-windows.exe
+            heic2jpg-ubuntu-latest
+            heic2jpg-macos-latest
+          generate_release_notes: true # 自动生成更新日志
