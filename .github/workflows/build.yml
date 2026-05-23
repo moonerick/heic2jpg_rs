@@ -1,0 +1,70 @@
+name: Build Rust HEIC Converter
+
+# 触发条件：当你推送代码到 main 分支，或者在网页上手动点击运行
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # 并行编译三个平台
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    steps:
+      # 1. 检出你的代码
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. 安装系统依赖 (Ubuntu 平台)
+      - name: Install dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libheif-dev
+
+      # 3. 安装系统依赖 (macOS 平台)
+      - name: Install dependencies (macOS)
+        if: matrix.os == 'macos-latest'
+        run: brew install libheif
+
+      # 4. 安装系统依赖 (Windows 平台)
+      # 使用 GitHub Actions 自带的 vcpkg 安装 libheif
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          vcpkg integrate install
+          vcpkg install libheif:x64-windows
+        shell: cmd
+
+      # 5. 安装 Rust 工具链
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # 6. 设置 Windows 下的 VCPKG 环境变量以供 Rust 使用
+      - name: Set VCPKG env (Windows)
+        if: matrix.os == 'windows-latest'
+        run: echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> $GITHUB_ENV
+        shell: bash
+
+      # 7. 核心步骤：执行 Release 模式编译
+      - name: Cargo Build Release
+        run: cargo build --release
+
+      # 8. 打包并上传编译好的文件 (Windows)
+      - name: Upload Artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: heic2jpg-windows
+          path: target/release/heic2jpg_rs.exe
+
+      # 9. 打包并上传编译好的文件 (Ubuntu/macOS)
+      - name: Upload Artifact (Unix)
+        if: matrix.os != 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: heic2jpg-${{ matrix.os }}
+          path: target/release/heic2jpg_rs
