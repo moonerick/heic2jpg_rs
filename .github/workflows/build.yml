@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies (Windows)
         run: |
           vcpkg integrate install
-          vcpkg install libheif:x64-windows
+          vcpkg install libheif:x64-windows-static-md
         shell: cmd
 
       - name: Setup Rust toolchain
